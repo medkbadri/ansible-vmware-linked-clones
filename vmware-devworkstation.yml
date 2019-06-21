@@ -1,0 +1,122 @@
+---
+- name: Create a linked clone in vcenter
+  hosts: localhost
+  gather_facts: no
+  vars:
+    vcenter_password: "{{ lookup('hashi_vault', 'secret=ansible-devworkstation/vCenter:vcenter_password')}}"
+    windows_password: "{{ lookup('hashi_vault', 'secret=ansible-devworkstation/Windows:windows_password')}}"
+  tasks:
+  - name: Create snapshot of parent VM
+    vmware_guest_snapshot:
+      hostname: "{{ vcenter_hostname }}"
+      username: "{{ vcenter_username }}"
+      password: "{{ vcenter_password }}"
+      datacenter: "{{ vcenter_datacenter }}"
+      folder: "{{ vcenter_folder }}"
+      validate_certs: False
+      name: "{{ guest_name }}"
+      snapshot_name: "Linked-Snapshot-for-{{ vcenter_clonename }}"
+      description: "Snapshot of linked clone for {{ vcenter_clonename }}"
+    delegate_to: localhost
+    register: snapshot_result
+    tags:
+      - linkedClone
+
+  - name: Debug SnapShot
+    debug:
+      var: snapshot_result
+    tags:
+      - linkedClone
+  
+  - name: Create a linked clone based on the newly created snapshot
+    vmware_guest:
+      hostname: "{{ vcenter_hostname }}"
+      username: "{{ vcenter_username }}"
+      password: "{{ vcenter_password }}"
+      datacenter: "{{ vcenter_datacenter }}"
+      validate_certs: False
+      folder: "{{ vcenter_folder }}"
+      name: "{{ vcenter_clonename }}"
+      state: poweredon
+      wait_for_ip_address: yes
+      datastore: "{{ devworkstation_ds }}"
+      linked_clone: yes
+      snapshot_src: "Linked-Snapshot-for-{{ vcenter_clonename }}"
+      template: "{{ guest_name }}"
+      cluster: "{{ devworkstation_cluster }}"
+    delegate_to: localhost
+    when: not snapshot_result.failed
+    register: clone_result
+    tags:
+      - linkedClone
+
+  - name: Debug Clone
+    debug:
+      var: clone_result
+    tags:
+      - linkedClone
+
+  - name: Add the newely created VM to the inventory
+    add_host:
+      name: "{{ clone_result.instance.ipv4 }}"
+      groups: devworkstation
+      ansible_user: "{{ windows_user }}"
+      ansible_password: "{{ windows_password }}"
+      ansible_port: 5985
+      ansible_connection: winrm
+      ansible_winrm_server_cert_validation: ignore
+    when: not clone_result.failed
+    tags:
+      - linkedClone
+
+  - name: Show all hosts in inventory
+    debug:
+      msg: "{{ item }}"
+    with_inventory_hostnames:
+      - all
+    tags:
+      - linkedClone
+
+- name: Customize newly created clone
+  hosts: devworkstation
+  gather_facts: no
+  vars:
+    domain_password: "{{ lookup('hashi_vault', 'secret=ansible-devworkstation/Windows:domain_password')}}"
+  tasks:
+  - name: Change the hostname
+    win_hostname:
+      name: "{{ vcenter_clonename }}"
+    register: res
+    tags:
+      - linkedCloneCustHostname
+
+  - name: Reboot
+    win_reboot:
+    when: res.reboot_required
+    tags:
+      - linkedCloneCustHostname
+
+  - name: Join Vistaprint domain
+    win_domain_membership:
+      dns_domain_name: "{{ domain_name }}"
+      domain_admin_user: "{{ domain_user }}"
+      domain_admin_password: "{{ domain_password }}"
+      domain_ou_path: "{{ domain_ou_path }}"
+      state: domain
+    register: domain_state
+    tags:
+      - linkedCloneCustJoinDomain
+
+  - name: Reboot
+    win_reboot:
+    when: domain_state.reboot_required
+    tags:
+      - linkedCloneCustJoinDomain
+
+  - name: Set requester as Administrator
+    win_group_membership:
+      name: Administrators
+      members: "{{ requester }}"
+      state: present
+    tags:
+      - linkedCloneCustAdmin
