@@ -1,8 +1,8 @@
 vcenter_clonename: "devvipwrklinked"
 windows_user: vagrant
 windows_password: ""
-domain_user: 
+domain_user: ""
 domain_password: ""
-domain_ou_path: 
-domain_name: vistaprint.net
+domain_ou_path: "" 
+domain_name: ""
 requester: ""
